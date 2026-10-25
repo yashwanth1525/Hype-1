@@ -1,0 +1,66 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip project
+        run: unzip -q CompanionPanel.zip
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install MAUI Android workload
+        run: dotnet workload install maui-android
+
+      - name: Install Android SDK dependencies
+        working-directory: CompanionPanel
+        run: >
+          dotnet build CompanionPanel.csproj -t:InstallAndroidDependencies
+          -f net10.0-android
+          "-p:AndroidSdkDirectory=$ANDROID_HOME"
+          -p:AcceptAndroidSDKLicenses=True
+
+      - name: Create throwaway signing key
+        working-directory: CompanionPanel
+        run: >
+          keytool -genkeypair -keystore ci.keystore -alias ci
+          -keyalg RSA -keysize 2048 -validity 10000
+          -storepass changeit -keypass changeit
+          -dname "CN=CompanionPanel"
+
+      - name: Publish APK (32-bit ARM + 64-bit ARM)
+        working-directory: CompanionPanel
+        run: >
+          dotnet publish CompanionPanel.csproj -f net10.0-android -c Release
+          "-p:RuntimeIdentifiers=android-arm%3Bandroid-arm64"
+          -p:AndroidKeyStore=true
+          -p:AndroidSigningKeyStore=ci.keystore
+          -p:AndroidSigningKeyAlias=ci
+          -p:AndroidSigningKeyPass=changeit
+          -p:AndroidSigningStorePass=changeit
+
+      - name: Show ABIs inside the APK
+        working-directory: CompanionPanel
+        run: |
+          APK=$(find bin -name "*-Signed.apk" | head -1)
+          echo "APK: $APK"
+          unzip -l "$APK" | awk '{print $4}' | grep '^lib/' | cut -d/ -f1-2 | sort -u
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CompanionPanel-apk
+          path: CompanionPanel/bin/**/*-Signed.apk
